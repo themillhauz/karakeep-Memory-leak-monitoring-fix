@@ -1,3 +1,18 @@
+> ## 🩹 This fork: health-route memory leak fix
+>
+> Fork of [karakeep-app/karakeep](https://github.com/karakeep-app/karakeep) that fixes a memory leak triggered by health-check/monitoring requests (Docker `HEALTHCHECK`, Uptime Kuma, Pangolin, Blackbox Exporter, etc.) — see upstream issue [karakeep-app/karakeep#2344](https://github.com/karakeep-app/karakeep/issues/2344), still open as of 2026-07.
+>
+> **Root cause:** [`f144f1bc`](https://github.com/karakeep-app/karakeep/commit/f144f1bcc21e20f29381aa5d69ed3f822dbaec9a) (2025-07) moved `/api/health` into the Hono catch-all router. Every health-check request now runs through `next-auth` init, allocating ~14 closure objects per call — a leak of roughly 3-17 MB/hour depending on check interval, affecting the container's own built-in `HEALTHCHECK` too, not just external monitors.
+>
+> **Fix:** a dedicated Next.js route ([`apps/web/app/api/health/route.ts`](apps/web/app/api/health/route.ts)) that bypasses the catch-all entirely.
+>
+> - Originally proposed upstream as [karakeep-app/karakeep#2582](https://github.com/karakeep-app/karakeep/pull/2582) — closed, not merged. Maintainers said a dedicated route already exists and planned to fix the leak at the homepage level instead; no such fix has landed as of 2026-07.
+> - Commits: [`bb82977d`](../../commit/bb82977d) (add health route), [`1e551d30`](../../commit/1e551d30) (force-dynamic, prevents Next.js from caching the response)
+> - CI ([`.github/workflows/docker.yml`](.github/workflows/docker.yml)) builds the `aio` image on every push to `main` and publishes to [`ghcr.io/themillhauz/karakeep:latest`](https://github.com/themillhauz/karakeep-Memory-leak-monitoring-fix/pkgs/container/karakeep)
+> - Running in production since 2026-03-11 with no memory-related restarts
+>
+> Everything below is upstream's original README.
+
 <div align="center">
     <a href="https://github.com/karakeep-app/karakeep/actions/workflows/ci.yml">
         <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/karakeep-app/karakeep/ci.yml" />
