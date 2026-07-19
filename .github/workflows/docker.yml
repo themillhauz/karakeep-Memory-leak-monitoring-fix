@@ -1,8 +1,10 @@
 name: Build and Push Docker (fork)
 on:
   release:
+    # "published" fires for both direct publishes and draft->publish;
+    # "created" alone missed draft releases and both together double-build.
     types:
-      - created
+      - published
   push:
     branches:
       - main
@@ -46,6 +48,10 @@ jobs:
           build-args: SERVER_VERSION=${{ github.event_name == 'release' && github.event.release.tag_name || 'nightly' }}
           file: docker/Dockerfile
           target: aio
-          platforms: linux/amd64,linux/arm64
+          # amd64 only: the arm64 half ran under QEMU and pushed builds past 70 min.
+          # Deployment target (LXC 113) is x86; use native arm runners if arm64 is ever needed.
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.all }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
