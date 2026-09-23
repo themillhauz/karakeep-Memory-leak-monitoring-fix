@@ -8,7 +8,6 @@ import {
   eq,
   getTableColumns,
   gt,
-  gte,
   inArray,
   lt,
   lte,
@@ -32,10 +31,14 @@ import {
   rssFeedImportsTable,
   tagsOnBookmarks,
 } from "@karakeep/db/schema";
-import { EmbeddingsQueue, SearchIndexingQueue } from "@karakeep/shared-server";
+import {
+  deleteAsset,
+  EmbeddingsQueue,
+  readAsset,
+  SearchIndexingQueue,
+} from "@karakeep/shared-server";
 
 import { WebhooksService } from "./webhooks.service";
-import { deleteAsset, readAsset } from "@karakeep/shared/assetdb";
 import { getAlignedExpiry } from "@karakeep/shared/signedTokens";
 import {
   BookmarkTypes,
@@ -59,6 +62,7 @@ import { htmlToPlainText } from "@karakeep/shared/utils/htmlUtils";
 
 import { AuthedContext } from "..";
 import { mapDBAssetTypeToUserType } from "../lib/attachments";
+import { getPreferredLinkPreview } from "../lib/linkPreview";
 import { Asset } from "./assets";
 import { List } from "./lists";
 
@@ -195,6 +199,16 @@ export class Bookmark extends BareBookmark {
         htmlContent: includeContent
           ? await Bookmark.getBookmarkHtmlContent(link, bookmark.userId)
           : null,
+        readerViewStatus: link.readerViewStatus,
+        readerViewScore: link.readerViewScore,
+        preferredPreview: getPreferredLinkPreview({
+          readerViewStatus: link.readerViewStatus,
+          readerViewReasons: link.readerViewReasons,
+          crawlStatusCode: link.crawlStatusCode,
+          hasScreenshot: assets.some(
+            (asset) => asset.assetType === AssetTypes.LINK_SCREENSHOT,
+          ),
+        }),
         crawledAt: link.crawledAt,
         crawlStatus: link.crawlStatus,
         author: link.author,
@@ -414,7 +428,9 @@ export class Bookmark extends BareBookmark {
 
   static async loadMulti(
     ctx: AuthedContext,
-    input: z.infer<typeof zGetBookmarksRequestSchema>,
+    // `ids` is intentionally not part of the public getBookmarks API; it's
+    // only settable by server-side callers (search, smart lists, public lists).
+    input: z.infer<typeof zGetBookmarksRequestSchema> & { ids?: string[] },
   ): Promise<{
     bookmarks: Bookmark[];
     nextCursor: ZCursor | null;
@@ -423,7 +439,11 @@ export class Bookmark extends BareBookmark {
       return { bookmarks: [], nextCursor: null };
     }
     if (!input.limit) {
-      input.limit = DEFAULT_NUM_BOOKMARKS_PER_PAGE;
+      // When loading by ids, callers expect all requested bookmarks back,
+      // not a single default-sized page.
+      input.limit = input.ids
+        ? input.ids.length
+        : DEFAULT_NUM_BOOKMARKS_PER_PAGE;
     }
 
     // Validate that only one of listId, tagId, or rssFeedId is specified
@@ -460,7 +480,7 @@ export class Bookmark extends BareBookmark {
           gt(createdAtCol, input.cursor.createdAt),
           and(
             eq(createdAtCol, input.cursor.createdAt),
-            gte(idCol, input.cursor.id),
+            lte(idCol, input.cursor.id),
           ),
         );
       }
@@ -606,6 +626,15 @@ export class Bookmark extends BareBookmark {
                   : row.bookmarkLinks.htmlContent
                 : null,
               contentAssetId: row.bookmarkLinks.contentAssetId,
+              readerViewStatus: row.bookmarkLinks.readerViewStatus,
+              readerViewScore: row.bookmarkLinks.readerViewScore,
+              preferredPreview: getPreferredLinkPreview({
+                readerViewStatus: row.bookmarkLinks.readerViewStatus,
+                readerViewReasons: row.bookmarkLinks.readerViewReasons,
+                crawlStatusCode: row.bookmarkLinks.crawlStatusCode,
+                hasScreenshot:
+                  row.assets?.assetType === AssetTypes.LINK_SCREENSHOT,
+              }),
               crawlStatus: row.bookmarkLinks.crawlStatus,
               crawledAt: row.bookmarkLinks.crawledAt,
               author: row.bookmarkLinks.author,
@@ -667,8 +696,18 @@ export class Bookmark extends BareBookmark {
           if (acc[bookmarkId].content.type == BookmarkTypes.LINK) {
             const content = acc[bookmarkId].content;
             invariant(content.type == BookmarkTypes.LINK);
+            invariant(
+              row.bookmarkLinks,
+              "a link bookmark must have a corresponding bookmarkLinks row",
+            );
             if (row.assets.assetType == AssetTypes.LINK_SCREENSHOT) {
               content.screenshotAssetId = row.assets.id;
+              content.preferredPreview = getPreferredLinkPreview({
+                readerViewStatus: row.bookmarkLinks.readerViewStatus,
+                readerViewReasons: row.bookmarkLinks.readerViewReasons,
+                crawlStatusCode: row.bookmarkLinks.crawlStatusCode,
+                hasScreenshot: true,
+              });
             }
             if (row.assets.assetType == AssetTypes.LINK_PDF) {
               content.pdfAssetId = row.assets.id;
